@@ -1,4 +1,17 @@
 <?php
+/*-------------------------------------------------------+
+| Sculpture network CiviSEPA customizations              |
+| Copyright (C) 2016 SYSTOPIA                            |
+| Author: J. Schuppe (schuppe@systopia.de)               |
++--------------------------------------------------------+
+| This program is released as free software under the    |
+| Affero GPL license. You can redistribute it and/or     |
+| modify it under the terms of this license which you    |
+| can read by viewing the included agpl.txt or online    |
+| at www.gnu.org/licenses/agpl.html. Removal of this     |
+| copyright header is strictly prohibited without        |
+| written permission from the original author(s).        |
++--------------------------------------------------------*/
 
 require_once 'sepacustom.civix.php';
 use CRM_Sepacustom_ExtensionUtil as E;
@@ -152,86 +165,48 @@ function sepacustom_civicrm_navigationMenu(&$menu) {
 } // */
 
 /**
- * This hook lets you modify the parameters of a to-be-created mandate.
+ * Implements hook_civicrm_create_mandate().
  *
- * As an example, we use this pattern to generate our custom mandate reference:
- *   P60-00C00000099D20150115N1
- *                            \__ counter to allow multiple mandates per
- * contact and date
- *                   \_______\___ date
- *          \_______\____________ contact ID
- *       \_\_____________________ inteval, 00=OOFF, 04=quarterly, 02=monthly,
- * etc.
- *   \__\________________________ identifier string
+ * @link https://github.com/Project60/org.project60.sepa#customisation
  */
 function sepacustom_civicrm_create_mandate(&$mandate_parameters) {
-
-  if (isset($mandate_parameters['reference']) && !empty($mandate_parameters['reference'])) {
-    return;   // user defined mandate
-  }
-
-  // load contribution
-  if ($mandate_parameters['entity_table'] == 'civicrm_contribution') {
-    $contribution = civicrm_api('Contribution', 'getsingle', array(
-      'version' => 3,
-      'id' => $mandate_parameters['entity_id'],
+  // Customize mandate reference when there is no custom reference given.
+  if (empty($mandate_parameters['reference'])) {
+    // When there is a value in field "Mitgliedsnummer" (custom_3), use that,
+    // else use the contact ID. In either case, append integer suffixes when the
+    // reference is already used.
+    $member_no = civicrm_api3('Contact', 'getsingle', array(
+      'id' => $mandate_parameters['contact_id'],
+      'return' => 'custom_3',
     ));
-    $interval = '00';   // one-time
-  }
-  elseif ($mandate_parameters['entity_table'] == 'civicrm_contribution_recur') {
-    $contribution = civicrm_api('ContributionRecur', 'getsingle', array(
-      'version' => 3,
-      'id' => $mandate_parameters['entity_id'],
-    ));
-    if ($contribution['frequency_unit'] == 'month') {
-      $interval = sprintf('%02d', 12 / $contribution['frequency_interval']);
-    }
-    elseif ($contribution['frequency_unit'] == 'year') {
-      $interval = '01';
+    if (!empty($member_no['custom_3'])) {
+      $reference = $member_no['custom_3'];
     }
     else {
-      // error:
-      $interval = '99';
+      $reference = $mandate_parameters['contact_id'];
     }
-  }
-  else {
-    die("unsupported mandate");
-  }
 
-  // Wenn alte Kundennummer vorhanden, wird diese gesetzt
-  // Wenn nicht, CiviCRM-ID
-  // Wenn bereits verwendet, wird -1, -2 etc. als Suffix angehängt
-  $member_no = civicrm_api3('Contact', 'getsingle', array(
-    'id' => $mandate_parameters['contact_id'],
-    'return' => 'custom_3',
-  ));
-  if (!empty($member_no['custom_3'])) {
-    $reference = $member_no['custom_3'];
-  }
-  else {
-    $reference = $mandate_parameters['contact_id'];
-  }
-
-  $n = 0;
-  do {
-    if ($n > 0) {
-      $reference_candidate = sprintf($reference . '-%d', $n);
+    $n = 0;
+    $limit = 25;
+    do {
+      if ($n > 0) {
+        $reference_candidate = sprintf($reference . '-%d', $n);
+      }
+      else {
+        $reference_candidate = $reference;
+      }
+      // Check if a mandate with this reference exists.
+      $mandate = civicrm_api('SepaMandate', 'getsingle', array(
+        'version' => 3,
+        'reference' => $reference_candidate,
+      ));
+      if (!empty($mandate['is_error'])) {
+        // does not exist! take it!
+        $mandate_parameters['reference'] = $reference_candidate;
+        return;
+      }
+      $n++;
     }
-    else {
-      $reference_candidate = $reference;
-    }
-    // check if it exists
-    $mandate = civicrm_api('SepaMandate', 'getsingle', array(
-      'version' => 3,
-      'reference' => $reference_candidate,
-    ));
-    if (!empty($mandate['is_error'])) {
-      // does not exist! take it!
-      $mandate_parameters['reference'] = $reference_candidate;
-      return;
-    }
-    $n++;
+    while($n < $limit);
   }
-  while(TRUE);
-  // TODO: Any limit?
 }
