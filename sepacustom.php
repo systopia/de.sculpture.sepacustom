@@ -210,3 +210,58 @@ function sepacustom_civicrm_create_mandate(&$mandate_parameters) {
     while($n < $limit);
   }
 }
+
+
+/**
+ * This hook is called by the batching algorithm:
+ *  whenever a new installment has been created for a given RCUR mandate
+ *  this hook is called so you can modify the resulting contribution,
+ *  e.g. connect it to a membership, or copy custom fields
+ *
+ * We use it here to fill the invoice-payfor-field if a membership is paid
+ * for somebody else.
+ *
+ * @param array  $mandate_id             the CiviSEPA mandate entity ID
+ * @param array  $contribution_recur_id  the recurring contribution connected to the mandate
+ * @param array  $contribution_id        the newly created contribution
+ *
+ * @access public
+ */
+function sepacustom_civicrm_installment_created($mandate_id, $contribution_recur_id, $contribution_id) {
+
+  // get the associated membership
+  $paid_by_logic = CRM_Membership_PaidByLogic::getSingleton();
+  $membership_ids = $paid_by_logic->getMembershipIDs($contribution_recur_id);
+
+  // do we have a membership at all?
+  if (count($membership_ids) == 0) {
+    return;
+  }
+  // in any case there shouldn't be more than one membership!
+  elseif (count($membership_ids) > 1) {
+    throw new Exception("More than one membership associated with this recurring-contribution: [$contribution_recur_id]");
+  }
+  else {
+    $membership_id = $membership_ids[0];
+  }
+
+  // get contribution-contact-id
+  $contribution_contact_id = civicrm_api3('Contribution', 'getvalue', [
+      'id' => $contribution_id,
+      'return'     => 'contact_id']);
+
+  // get membership-contact-id
+  $membership_contact_id = civicrm_api3('Membership', 'getvalue', [
+      'id' => $membership_id,
+      'return'     => 'contact_id']);
+
+  // if the membership- and the contribution-contact differ, set the payfor-field
+  if ($contribution_contact_id != $membership_contact_id) {
+    $custom_field = CRM_Scripts_CustomData::getCustomField('contribution_invoice', 'invoice_payfor');
+    $custom_field_key = 'custom_' . $custom_field['id'];
+    civicrm_api3('Contribution', 'create', [
+      'id'   => $contribution_id,
+      $custom_field_key => $membership_contact_id]);
+  }
+
+}
